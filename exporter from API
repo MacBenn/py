@@ -1,0 +1,96 @@
+import requests
+import csv
+
+deviceeras = []
+TOKEN = input('AUTH_Token: ')
+
+def appenddevice(devicelist):
+    for row in devicelist:
+        deviceeras.append(row)
+
+def refresh(TOKEN):
+    subheaders = {
+        'authority': 'api.webpageone.com',
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'en-US,en;q=0.9',
+        'origin': 'https://webpageone.com'
+    }
+
+    subjson_data = {
+        'token': TOKEN[4:]
+    }
+
+    subresponse = requests.post('https://api.webpageone.com/api/auth/jwt/refresh/', headers=subheaders, json=subjson_data)
+    subdata = subresponse.json()
+    newtok = 'JWT ' + subdata['token']
+    return newtok
+
+headers = {
+    'authority': 'api.webpageone.com',
+    'accept': 'application/json, text/plain, */*',
+    'accept-language': 'en-US,en;q=0.9',
+    'authorization': TOKEN,
+    'origin': 'https://webpageone.com'
+}
+
+params = {
+   
+}
+
+response = requests.get('https://api.webpageone.com/path', params=params, headers=headers)
+data = response.json()
+totalpages = data['totalPages']
+appenddevices(data['results'])
+i = 2
+failure = 0
+stoptemp = 1
+while i <= totalpages:
+    headers = {
+        'authority': 'api.webpageone.com',
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'en-US,en;q=0.9',
+        'authorization': TOKEN,
+        'origin': 'https://webpageone.com',
+    }
+
+    params = {
+        'page': str(i),
+        'page_size': '100',
+        'search': '',
+        
+    }
+
+    response = requests.get('https://api.webpageone.com/api/service/deviceera/', params=params, headers=headers)
+    try:
+        if stoptemp == 1:
+            data = response.json()
+            appenddevices(data['results'])
+            print('Page ' + str(i) + ' completed out of ' + str(totalpages))
+            failure = 0
+            i += 1
+        else:
+            TOKEN = input('Attempting paused - please update token: ')
+            if TOKEN != '':
+                stoptemp = 1
+    except Exception as e:
+        if failure == 0:
+            print('First Failure - Retrying page ' + str(i) + ' out of ' + str(totalpages))
+            failure += 1
+        elif failure == 1:
+            print('Second Failure - try updating Security Token')
+            TOKEN = refresh(TOKEN)
+            failure += 1
+        else:
+            print('Third failure - page #' + str(i))
+            print('Response reason: ' + response.reason)
+            TOKEN = ''
+            failure = 0
+            stoptemp = 1
+            i += 1
+
+with open("C://path//to//save", 'w', newline='') as f:
+    writer = csv.writer(f)
+    writer.writerow(["deviceera Name", "Core SN", "Owner Organization"])
+    for deviceera in deviceeras:
+        writer.writerow([device['name'], device["applianceSerialNumber"], device['organization']['name']])
+    print('Data saved to CSV')
