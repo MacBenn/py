@@ -1,0 +1,196 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import pyshark
+
+class PcapAnalyzerApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("PCAP Analyzer")
+        self.root.geometry("1200x800")
+        self.root.configure(bg="black")
+
+        # Styling
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("TButton", background="yellow", foreground="black", font=("Arial", 12, "bold"))
+        style.configure("TLabel", background="black", foreground="yellow", font=("Arial", 12))
+        style.configure("Treeview", background="black", foreground="yellow", fieldbackground="black", font=("Arial", 10))
+        style.map("Treeview", background=[("selected", "yellow")], foreground=[("selected", "black")])
+
+        # Upload button
+        self.upload_btn = ttk.Button(root, text="Upload File", command=self.upload_file)
+        self.upload_btn.pack(pady=20)
+
+        # Controls frame
+        self.controls_frame = tk.Frame(root, bg="black")
+        self.controls_frame.pack(pady=5)
+
+        # Buttons to show charts and clear filters
+        self.protocol_btn = ttk.Button(self.controls_frame, text="Show Protocol Distribution", command=self.show_protocol_distribution)
+        self.protocol_btn.grid(row=0, column=0, padx=10, pady=10)
+
+        self.ip_btn = ttk.Button(self.controls_frame, text="Show Top Communicating IPs", command=self.show_top_communicating_ips)
+        self.ip_btn.grid(row=0, column=1, padx=10, pady=10)
+
+        self.clear_filter_btn = ttk.Button(self.controls_frame, text="Clear Filters", command=self.clear_filters)
+        self.clear_filter_btn.grid(row=0, column=2, padx=10, pady=10)
+
+        # Health status
+        self.health_label = ttk.Label(root, text="ARP Check = Healthy", foreground="green")
+        self.health_label.pack(pady=10)
+
+        # Packet data table
+        self.tree = ttk.Treeview(
+            root, 
+            columns=('Timestamp', 'Protocol', 'Source IP', 'Destination IP', 'Source Port', 'Destination Port', 'Length'), 
+            show='headings'
+        )
+        for col in self.tree['columns']:
+            self.tree.heading(col, text=col, anchor='w')
+            self.tree.column(col, anchor='w', width=150)
+        self.tree.pack(expand=True, fill='both')
+
+        self.tree.bind("<Double-1>", self.on_packet_select)
+
+    def upload_file(self):
+        """Upload and parse a PCAP file."""
+        file_path = filedialog.askopenfilename(filetypes=[("All Files", "*.*"), ("PCAP Files", "*.pcap")])
+        if file_path:
+            try:
+                self.df = self.parse_pcap(file_path)
+                self.display_data(self.df)
+                self.check_arp_poisoning()
+                self.upload_btn.pack_forget()
+                self.controls_frame.pack(pady=10)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to parse file: {e}")
+
+    def parse_pcap(self, file_path):
+        """Parse the PCAP file into a DataFrame."""
+        packets = pyshark.FileCapture(file_path)
+        data = []
+        for packet in packets:
+            try:
+                protocol = packet.highest_layer
+                src_ip = packet.ip.src
+                dst_ip = packet.ip.dst
+                src_port = packet[packet.transport_layer].srcport if packet.transport_layer else None
+                dst_port = packet[packet.transport_layer].dstport if packet.transport_layer else None
+                length = packet.length
+                timestamp = packet.sniff_time
+                data.append([timestamp, protocol, src_ip, dst_ip, src_port, dst_port, length])
+            except AttributeError:
+                continue
+        return pd.DataFrame(data, columns=['Timestamp', 'Protocol', 'Source IP', 'Destination IP', 'Source Port', 'Destination Port', 'Length'])
+
+    def display_data(self, df):
+        """Display packet data."""
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+        for _, row in df.iterrows():
+            self.tree.insert('', 'end', values=list(row))
+
+    def on_packet_select(self, event):
+        """Display packet details."""
+        selected_item = self.tree.focus()
+        packet = self.tree.item(selected_item)['values']
+        if packet:
+            self.show_packet_details(packet)
+
+    def show_packet_details(self, packet):
+        """Show packet details in a new window."""
+        details_window = tk.Toplevel(self.root)
+        details_window.title("Packet Details")
+        details_window.configure(bg="black")
+
+        text_widget = tk.Text(details_window, wrap='word', bg="black", fg="yellow")
+        text_widget.insert('1.0', str(packet))
+        text_widget.pack(expand=True, fill='both')
+
+    def show_protocol_distribution(self):
+        """Show the protocol distribution chart."""
+        protocol_counts = self.df['Protocol'].value_counts()
+        fig, ax = plt.subplots()
+        bars = ax.bar(protocol_counts.index, protocol_counts.values, color="black")
+        ax.set_facecolor("yellow")
+        ax.set_title("Protocol Distribution", color="black")
+        ax.set_xlabel("Protocol", color="black")
+        ax.set_ylabel("Count", color="black")
+
+        def on_click(event):
+            """Filter by protocol on bar click."""
+            for i, bar in enumerate(bars):
+                if bar.contains(event)[0]:
+                    protocol = protocol_counts.index[i]
+                    self.filter_by_protocol(protocol)
+                    break
+
+        fig.canvas.mpl_connect('button_press_event', on_click)
+        self.show_matplotlib_in_window(fig)
+
+    def show_top_communicating_ips(self):
+        """Show top communicating IPs chart."""
+        top_sources = self.df['Source IP'].value_counts().head(5)
+        top_destinations = self.df['Destination IP'].value_counts().head(5)
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        bars1 = ax1.bar(top_sources.index, top_sources.values, color="black")
+        ax1.set_facecolor("yellow")
+        ax1.set_title("Top Source IPs", color="black")
+
+        bars2 = ax2.bar(top_destinations.index, top_destinations.values, color="black")
+        ax2.set_facecolor("yellow")
+        ax2.set_title("Top Destination IPs", color="black")
+
+        def on_click(event):
+            """Filter by IP on bar click."""
+            for i, bar in enumerate(bars1):
+                if bar.contains(event)[0]:
+                    ip = top_sources.index[i]
+                    self.filter_by_ip(ip, 'Source IP')
+                    break
+
+            for i, bar in enumerate(bars2):
+                if bar.contains(event)[0]:
+                    ip = top_destinations.index[i]
+                    self.filter_by_ip(ip, 'Destination IP')
+                    break
+
+        fig.canvas.mpl_connect('button_press_event', on_click)
+        self.show_matplotlib_in_window(fig)
+
+    def show_matplotlib_in_window(self, fig):
+        """Show chart in a new Tkinter window."""
+        window = tk.Toplevel(self.root)
+        window.configure(bg="black")
+        canvas = FigureCanvasTkAgg(fig, master=window)
+        canvas.draw()
+        canvas.get_tk_widget().pack(expand=True, fill='both')
+
+    def clear_filters(self):
+        """Clear all filters."""
+        self.display_data(self.df)
+
+    def filter_by_protocol(self, protocol):
+        """Filter packets by protocol."""
+        filtered_df = self.df[self.df['Protocol'] == protocol]
+        self.display_data(filtered_df)
+
+    def filter_by_ip(self, ip, ip_type):
+        """Filter packets by IP."""
+        filtered_df = self.df[self.df[ip_type] == ip]
+        self.display_data(filtered_df)
+
+    def check_arp_poisoning(self):
+        """Check for ARP poisoning."""
+        arp_packets = self.df[self.df['Protocol'].str.contains('ARP', case=False, na=False)]
+        suspicious = arp_packets.groupby('Source IP').size().max() > 1 if not arp_packets.empty else False
+        self.health_label.config(text="ARP Check = Healthy" if not suspicious else "Possible ARP Poisoning Detected!", fg="red" if suspicious else "green")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = PcapAnalyzerApp(root)
+    root.mainloop()
